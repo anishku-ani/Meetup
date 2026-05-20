@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { supabase } from "./supabaseClient";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -28,7 +29,6 @@ function getRoomId() {
 }
 
 const ROOM_ID = getRoomId();
-const STORAGE_KEY = `meetup_v2_${ROOM_ID}`;
 
 // ─── Default factories ────────────────────────────────────────────────────────
 
@@ -436,17 +436,34 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [lastSaved, setLastSaved] = useState(null);
 
-  // Load from shared storage on mount + poll every 8s
+  // Load from Supabase on mount + poll every 8s
   const loadData = useCallback(async () => {
-    try {
-      const result = await window.storage.get(STORAGE_KEY, true);
-      if (result?.value) {
-        const parsed = JSON.parse(result.value);
-        setData(PARTICIPANTS.map((name) => parsed.find((p) => p.name === name) || defaultParticipant(name)));
-      }
-    } catch (_) {}
+  try {
+    const { data: row, error } = await supabase
+      .from("meetup_rooms")
+      .select("data")
+      .eq("room_id", ROOM_ID)
+      .maybeSingle();
+
+    if (error) {
+  throw error;
+}
+
+    if (row?.data) {
+      setData(
+        PARTICIPANTS.map(
+          (name) =>
+            row.data.find((p) => p.name === name) ||
+            defaultParticipant(name)
+        )
+      );
+    }
+  } catch (err) {
+    console.error("Error loading data:", err);
+  } finally {
     setLoading(false);
-  }, []);
+  }
+}, []);
 
   useEffect(() => {
     loadData();
@@ -454,32 +471,66 @@ export default function App() {
     return () => clearInterval(interval);
   }, [loadData]);
 
-  async function saveParticipant(name, updated) {
-    const newData = data.map((p) => (p.name === name ? updated : p));
-    setData(newData);
-    try {
-      await window.storage.set(STORAGE_KEY, JSON.stringify(newData), true);
-      setLastSaved(new Date());
-    } catch (_) {}
+ async function saveParticipant(name, updated) {
+  const newData = data.map((p) => (p.name === name ? updated : p));
+  setData(newData);
+
+  try {
+    const { error } = await supabase
+      .from("meetup_rooms")
+      .upsert({
+        room_id: ROOM_ID,
+        data: newData,
+        updated_at: new Date().toISOString(),
+      });
+
+    if (error) throw error;
+    setLastSaved(new Date());
+  } catch (err) {
+    console.error("Error saving participant:", err);
   }
+}
 
   async function clearParticipant(name) {
     const newData = data.map((p) => (p.name === name ? defaultParticipant(name) : p));
     setData(newData);
+
     try {
-      await window.storage.set(STORAGE_KEY, JSON.stringify(newData), true);
+      const { error } = await supabase
+        .from("meetup_rooms")
+        .upsert({
+          room_id: ROOM_ID,
+          data: newData,
+          updated_at: new Date().toISOString(),
+        });
+
+      if (error) throw error;
       setLastSaved(new Date());
-    } catch (_) {}
+    } catch (err) {
+      console.error("Error clearing participant:", err);
+    }
   }
 
   async function resetAll() {
     if (!window.confirm("Reset all responses? This cannot be undone.")) return;
+
     const fresh = PARTICIPANTS.map(defaultParticipant);
     setData(fresh);
+
     try {
-      await window.storage.set(STORAGE_KEY, JSON.stringify(fresh), true);
+      const { error } = await supabase
+        .from("meetup_rooms")
+        .upsert({
+          room_id: ROOM_ID,
+          data: fresh,
+          updated_at: new Date().toISOString(),
+        });
+
+      if (error) throw error;
       setLastSaved(new Date());
-    } catch (_) {}
+    } catch (err) {
+      console.error("Error resetting all responses:", err);
+    }
   }
 
   return (
